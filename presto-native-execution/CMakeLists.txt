@@ -196,6 +196,7 @@ find_package(OpenSSL REQUIRED)
 find_package(Sodium REQUIRED)
 find_library(PROXYGEN proxygen)
 find_library(PROXYGEN_HTTPSERVER proxygen_httpserver)
+find_library(CARES NAMES cares REQUIRED)
 find_library(FIZZ fizz)
 find_library(WANGLE wangle)
 find_library(MVFST mvfst)
@@ -212,6 +213,7 @@ set(
   ${WANGLE}
   ${FIZZ}
   ${MVFST}
+  ${CARES}
 )
 find_path(PROXYGEN_DIR NAMES include/proxygen)
 set(PROXYGEN_INCLUDE_DIR "${PROXYGEN_DIR}/include/")
