@@ -321,10 +321,13 @@ def stop_worker():
     worker_proc = None
 
 
-def start_worker(cudf, presto_version, delta=False):
+def start_worker(cudf, presto_version, delta=False, catalog_extra=""):
     global worker_proc
     stop_worker()
     etc = write_worker_etc(cudf, presto_version, delta)
+    if catalog_extra:
+        catalog = etc / "catalog" / ("delta.properties" if delta else "hive.properties")
+        catalog.write_text(catalog.read_text() + catalog_extra)
     log_path = SMOKE / "logs" / f"worker-{'cudf' if cudf else 'cpu'}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()

@@ -48,7 +48,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -124,6 +126,9 @@ public class UnityHiveMetastore
         }
         String location = locationNode.asText();
         log.info("Unity Catalog %s storage_location=%s", fullName, location);
+        if (isS3Location(location)) {
+            storeTemporaryCredentials(fullName, location, text(root, "table_id"));
+        }
         return Optional.of(Table.builder()
                 .setDatabaseName(databaseName)
                 .setTableName(tableName)
@@ -373,21 +378,89 @@ public class UnityHiveMetastore
         throw new UnsupportedOperationException();
     }
 
+    private void storeTemporaryCredentials(String fullName, String location, String tableId)
+    {
+        if (tableId.isEmpty()) {
+            throw new PrestoException(
+                    HIVE_METASTORE_ERROR,
+                    "Unity Catalog table " + fullName + " returned no table_id");
+        }
+        Map<String, String> payload = new LinkedHashMap<>();
+        payload.put("table_id", tableId);
+        payload.put("operation", "READ");
+        JsonNode creds = postJson("/api/2.1/unity-catalog/temporary-table-credentials", payload);
+        JsonNode aws = creds.get("aws_temp_credentials");
+        if (aws == null || aws.isNull()) {
+            throw new PrestoException(
+                    HIVE_METASTORE_ERROR,
+                    "Unity Catalog returned no aws_temp_credentials for " + fullName);
+        }
+        String accessKey = text(aws, "access_key_id");
+        String secretKey = text(aws, "secret_access_key");
+        String sessionToken = text(aws, "session_token");
+        if (accessKey.isEmpty() || secretKey.isEmpty()) {
+            throw new PrestoException(
+                    HIVE_METASTORE_ERROR,
+                    "Unity Catalog temporary credentials for " + fullName + " were missing an access key or secret");
+        }
+        UnityTableCredentials.put(location, accessKey, secretKey, sessionToken);
+        log.info("Unity Catalog %s temporary credentials stored for bucket %s", fullName, UnityTableCredentials.bucket(location));
+    }
+
+    private static boolean isS3Location(String location)
+    {
+        String scheme = location.toLowerCase(Locale.ROOT);
+        return scheme.startsWith("s3://") || scheme.startsWith("s3a://") || scheme.startsWith("s3n://");
+    }
+
+    private static String text(JsonNode node, String field)
+    {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) {
+            return "";
+        }
+        return value.asText();
+    }
+
     private JsonNode getJson(String path)
     {
-        String url = server + path;
+        return send(path, null);
+    }
+
+    private JsonNode postJson(String path, Map<String, String> payload)
+    {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+            return send(path, MAPPER.writeValueAsString(payload));
+        }
+        catch (PrestoException exception) {
+            throw exception;
+        }
+        catch (Exception exception) {
+            throw new PrestoException(HIVE_METASTORE_ERROR, "Unity Catalog POST " + server + path + " failed: " + exception.getMessage(), exception);
+        }
+    }
+
+    private JsonNode send(String path, String jsonBody)
+    {
+        String url = server + path;
+        String method = jsonBody == null ? "GET" : "POST";
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                     .timeout(java.time.Duration.ofSeconds(30))
-                    .header("Accept", "application/json")
-                    .GET()
-                    .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    .header("Accept", "application/json");
+            if (jsonBody == null) {
+                builder.GET();
+            }
+            else {
+                builder.header("Content-Type", "application/json");
+                builder.POST(HttpRequest.BodyPublishers.ofString(jsonBody));
+            }
+            HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
             String body = response.body() == null ? "" : response.body();
             if (response.statusCode() / 100 != 2) {
                 throw new PrestoException(
                         HIVE_METASTORE_ERROR,
-                        "Unity Catalog GET " + url + " returned " + response.statusCode() + ": " + abbreviate(body));
+                        "Unity Catalog " + method + " " + url + " returned " + response.statusCode() + ": " + abbreviate(body));
             }
             return MAPPER.readTree(body);
         }
@@ -395,7 +468,7 @@ public class UnityHiveMetastore
             throw exception;
         }
         catch (Exception exception) {
-            throw new PrestoException(HIVE_METASTORE_ERROR, "Unity Catalog GET " + url + " failed: " + exception.getMessage(), exception);
+            throw new PrestoException(HIVE_METASTORE_ERROR, "Unity Catalog " + method + " " + url + " failed: " + exception.getMessage(), exception);
         }
     }
 

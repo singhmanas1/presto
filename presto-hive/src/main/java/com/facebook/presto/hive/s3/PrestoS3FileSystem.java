@@ -21,6 +21,7 @@ import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.auth.BasicSessionCredentials;
 import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.auth.InstanceProfileCredentialsProvider;
 import com.amazonaws.auth.STSAssumeRoleSessionCredentialsProvider;
@@ -57,6 +58,7 @@ import com.facebook.airlift.log.Logger;
 import com.facebook.airlift.units.DataSize;
 import com.facebook.airlift.units.Duration;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
+import com.facebook.presto.hive.metastore.unity.UnityTableCredentials;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractSequentialIterator;
 import com.google.common.collect.ImmutableSet;
@@ -126,6 +128,7 @@ import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_MULTIPART_MI
 import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_PATH_STYLE_ACCESS;
 import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_PIN_CLIENT_TO_CURRENT_REGION;
 import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SECRET_KEY;
+import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SESSION_TOKEN;
 import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SIGNER_TYPE;
 import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SKIP_GLACIER_OBJECTS;
 import static com.facebook.presto.hive.s3.S3ConfigurationUpdater.S3_SOCKET_TIMEOUT;
@@ -896,8 +899,15 @@ public class PrestoS3FileSystem
 
     private static Optional<AWSCredentials> getAwsCredentials(URI uri, Configuration conf)
     {
+        Optional<UnityTableCredentials.Credential> vended = UnityTableCredentials.lookup(uri);
+        if (vended.isPresent()) {
+            log.info("Using Unity Catalog temporary credentials for %s", uri);
+            return Optional.of(credentials(vended.get().getAccessKey(), vended.get().getSecretKey(), vended.get().getSessionToken()));
+        }
+
         String accessKey = conf.get(S3_ACCESS_KEY);
         String secretKey = conf.get(S3_SECRET_KEY);
+        String sessionToken = conf.get(S3_SESSION_TOKEN);
 
         String userInfo = uri.getUserInfo();
         if (userInfo != null) {
@@ -914,7 +924,15 @@ public class PrestoS3FileSystem
         if (isNullOrEmpty(accessKey) || isNullOrEmpty(secretKey)) {
             return Optional.empty();
         }
-        return Optional.of(new BasicAWSCredentials(accessKey, secretKey));
+        return Optional.of(credentials(accessKey, secretKey, sessionToken));
+    }
+
+    private static AWSCredentials credentials(String accessKey, String secretKey, String sessionToken)
+    {
+        if (isNullOrEmpty(sessionToken)) {
+            return new BasicAWSCredentials(accessKey, secretKey);
+        }
+        return new BasicSessionCredentials(accessKey, secretKey, sessionToken);
     }
 
     public static class PrestoS3ObjectMetadata

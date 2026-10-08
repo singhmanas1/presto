@@ -24,7 +24,7 @@ Run these once, in this order, on a machine that already has CUDA at `/usr/local
 /home/nvidia/Presto/presto/scripts/startup/build-coordinator.sh
 ```
 
-After both builds succeed, the smoke tests below can run. `rebuild-worker.sh` is only for a later C++ change. `simulate-uc-managed-delta.sh` creates Unity Catalog managed Delta tables and runs the same join through the coordinator.
+After both builds succeed, the smoke tests below can run. `rebuild-worker.sh` is only for a later C++ change. `simulate-uc-managed-delta.sh` creates Unity Catalog managed Delta tables and runs the same join through the coordinator. The S3 scripts further down put one of those tables on a local bucket. What passed and what failed is in [TEST-REPORT.md](TEST-REPORT.md).
 
 ## switch-to-johnzed.sh
 
@@ -147,3 +147,31 @@ The unpacked `plugin/delta` directory must contain only that Kernel version. An 
 UC_URL=http://127.0.0.1:8082 UC_CATALOG=unity \
   /home/nvidia/Presto/smoke/.venv/bin/python /home/nvidia/Presto/uc/create_managed_tables.py
 ```
+
+## Cloud table on local S3
+
+These scripts keep the file:// tables and add `clouds.smoke.cloud_numbers` on a local S3 server at `http://127.0.0.1:9000`, bucket `warehouse`. Presto queries it as `delta.smoke.cloud_numbers`. The expected result is `"135","10"`.
+
+The coordinator asks Unity Catalog for a temporary read key and uses that key, including the session token, to open the table log. The native worker does not receive that temporary key. Its catalog file has the local bucket password, because the worker S3 settings have no session-token field. Both sides must be able to read the bucket. The vended key lasts one hour.
+
+```bash
+/home/nvidia/Presto/presto/scripts/startup/rebuild-worker-s3.sh
+/home/nvidia/Presto/presto/scripts/startup/update-coordinator-credentials.sh
+/home/nvidia/Presto/presto/scripts/startup/simulate-uc-s3.sh
+```
+
+`rebuild-worker-s3.sh` reconfigures the existing Prestissimo build with `PRESTO_OPTIONAL_FEATURES=cudf,parquet,s3` and `-DVELOX_ENABLE_S3=ON`, then relinks `presto_server`. It does not run `make release` and does not move the Velox checkout. Log: `/home/nvidia/Presto/rebuild-worker-s3.log`.
+
+`update-coordinator-credentials.sh` packages `presto-hive-metastore` and `presto-hive`, then copies those jars into the already unpacked coordinator. It does not unpack a new server tarball. Unpacking the current tarball would put Delta Kernel 4.0.0 back next to 4.4.1.
+
+`simulate-uc-s3.sh` starts the local S3 server if it is down, asks it for a one-hour key, reloads Unity Catalog, drops and recreates the cloud table with Spark, and runs `smoke/run_uc_s3.py`. Log: `/home/nvidia/Presto/uc-s3-simulation.log`.
+
+To rerun the query without recreating the table, refresh the key and query again:
+
+```bash
+/home/nvidia/Presto/presto/scripts/startup/refresh-uc-s3-key.sh
+```
+
+`test-bad-coordinator-key.sh` repeats that query while Unity Catalog is handing out a fake key, then puts the real key back. A real key returns `"135","10"`. A fake key dies while the coordinator is still planning.
+
+`smoke/run_uc_s3.py` is the query itself. It starts a CPU worker. A pass prints `cloud_query_ok=1`.
