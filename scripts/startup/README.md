@@ -24,7 +24,7 @@ Run these once, in this order, on a machine that already has CUDA at `/usr/local
 /home/nvidia/Presto/presto/scripts/startup/build-coordinator.sh
 ```
 
-After both builds succeed, the smoke tests below can run. `rebuild-worker.sh` is only for a later C++ change. `simulate-uc-managed-delta.sh` is the Unity Catalog repro, and it is expected to stop inside the Delta reader.
+After both builds succeed, the smoke tests below can run. `rebuild-worker.sh` is only for a later C++ change. `simulate-uc-managed-delta.sh` creates Unity Catalog managed Delta tables and runs the same join through the coordinator.
 
 ## switch-to-johnzed.sh
 
@@ -121,7 +121,7 @@ python3 -m venv /home/nvidia/Presto/smoke/.venv
 
 ## simulate-uc-managed-delta.sh
 
-Stands up Unity Catalog, creates two catalog-managed Delta tables with Spark, rebuilds the coordinator, and runs the same join through the `unity` metastore. It stops at the first failure and does not change the Delta reader.
+Stands up Unity Catalog, creates two catalog-managed Delta tables with Spark, rebuilds the coordinator, and runs the same join through the `unity` metastore.
 
 ```bash
 /home/nvidia/Presto/presto/scripts/startup/simulate-uc-managed-delta.sh
@@ -133,17 +133,13 @@ What it does:
 
 - Requires Docker and OpenJDK 17.
 - Starts `unitycatalog/unitycatalog:v0.5.0` as container `presto-uc`, listening on host port `8082`. Table files go to `/home/nvidia/presto-uc/warehouse`. Server settings are `uc/server.properties` (`server.managed-table.enabled=true`, authorization off).
-- Installs PySpark 4.1.0 into `/home/nvidia/Presto/smoke/.venv` and runs `uc/create_managed_tables.py`. That creates `unity.smoke.join_left` and `unity.smoke.join_right` with `delta.feature.catalogManaged=supported`.
+- Installs PySpark 4.1.0 into `/home/nvidia/Presto/smoke/.venv` and runs `uc/create_managed_tables.py`. That creates `unity.smoke.join_left` and `unity.smoke.join_right` with `delta.feature.catalogManaged=supported`. Unity Catalog records both as `MANAGED` Delta tables.
 - Rebuilds and unpacks the coordinator the same way `build-coordinator.sh` does.
 - Runs `smoke/run_uc_join.py`, which points the `delta` catalog at `hive.metastore=unity` and `http://127.0.0.1:8082`.
 
-The lookup succeeds and prints `storage_location`. The query then fails in Delta Kernel 4.0.0 while opening that directory:
+The Delta connector needs Delta Kernel 4.4.0 or higher. This checkout pins 4.4.1. Kernel 4.0.0 stops on `catalogManaged`. With 4.4.0 or higher, the coordinator calls Unity Catalog's REST API, reads `storage_location`, and the existing Delta reader opens that folder. A pass prints `cpu_output` and `cudf_output` both as `"4950000","10000"`, and the cuDF worker log contains `CudfHashJoinProbe`.
 
-```text
-Unsupported Delta table feature: table requires feature "catalogManaged" which is unsupported by this version of Delta Kernel.
-```
-
-That is the end of this simulation. The script does not call the Unity Catalog commits API, and it does not start the cuDF worker after the coordinator fails to open the table.
+The unpacked `plugin/delta` directory must contain only that Kernel version. An older `delta-kernel-*-4.0.0.jar` left beside `4.4.1` is loaded first.
 
 `uc/create_managed_tables.py` can be rerun on its own while `presto-uc` is already up:
 

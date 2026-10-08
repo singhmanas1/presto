@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Create two Unity Catalog managed Delta tables with Spark.
 
-The tables are catalog-managed. Spark asks Unity Catalog for the directory
-and commits through the catalog. This script does not teach Presto that protocol.
+Spark registers the tables with Unity Catalog and writes the rows.
+Presto reads them afterward through the Unity Catalog lookup.
 """
 
 import os

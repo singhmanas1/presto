@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Stand up a local Unity Catalog, create two managed Delta tables, and run
-# the join through the coordinator's existing Delta reader. Stop at the first
-# failure. Do not change the reader.
+# the join through the coordinator. Requires Delta Kernel 4.4.0 or higher.
 set -euo pipefail
 
 ROOT=/home/nvidia/Presto
